@@ -1,39 +1,50 @@
 import numpy as np
+import torch
 
 
 # Defines an agent which can act in environments, controlled by a neural network
 class Agent:
 
-    def __init__(self, network, initial_state, num_actions, discount_factor, epsilon_max, epsilon_min,
-                 epsilon_num_steps):
+    def __init__(self, network, num_actions, discount_factor, epsilon_max, epsilon_min,
+                 epsilon_dec):
         self.network = network
-        self.state = initial_state
         self.num_actions = num_actions
         self.discount_factor = discount_factor
         self.epsilon_max = epsilon_max
         self.epsilon_min = epsilon_min
         self.epsilon = epsilon_max
-        self.epsilon_num_steps = epsilon_num_steps
+        self.epsilon_dec = epsilon_dec
 
     # Trains the agent using reinforcement learning
-    def update(self, action, reward, new_state):
-        current_q_values = self.network.feedforward(self.state)
-        target_q_values = current_q_values
-        best_q_in_new_state = max(self.network.feedforward(new_state))
-        target_q_values[action] = reward + self.discount_factor * best_q_in_new_state
-        self.network.train([self.state], [target_q_values])
+    def update(self, state, action, reward, new_state):
+        self.network.optimizer.zero_grad()
+        state = torch.tensor(state, dtype=torch.float).to(self.network.device)
+        action = torch.tensor(action).to(self.network.device)
+        reward = torch.tensor(reward).to(self.network.device)
+        new_state = torch.tensor(new_state, dtype=torch.float).to(self.network.device)
+        current_q_value = self.network.feedforward(state)[action]
+        best_q_in_new_state = self.network.feedforward(new_state).max()
+        target_q_value = reward + self.discount_factor * best_q_in_new_state
+        cost = self.network.loss(target_q_value, current_q_value).to(self.network.device)
+        cost.backward()
+        self.network.optimizer.step()
+        self.update_epsilon()
 
     # Chooses an action according to the epsilon greedy policy
-    def action(self):
+    def action(self, state):
         if np.random.uniform(0, 1) < self.epsilon:
             return np.random.choice(range(self.num_actions))
-        return self.best_action(self.state)
+        return self.best_action(state)
 
     # Finds the action which leads to the greatest reward in a given state, according to the neural network
     def best_action(self, state):
+        state = torch.tensor(state, dtype=torch.float).to(self.network.device)
         action_values = self.network.feedforward(state)
-        return np.argmax(action_values)
+        return torch.argmax(action_values).item()
 
     # Linearly decreases the value of epsilon
     def update_epsilon(self):
-        self.epsilon += (self.epsilon_min - self.epsilon_max) / self.epsilon_num_steps
+        if self.epsilon > self.epsilon_min:
+            self.epsilon -= self.epsilon_dec
+        else:
+            self.epsilon = self.epsilon_min
